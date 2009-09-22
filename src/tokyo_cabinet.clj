@@ -26,18 +26,40 @@
 
 (declare *db*)
 
+(def *cache* (ref {})) ;values are [value time-added]
+(def *cache-timeout* 200000) ;How many seconds to cache stuff for
+
 (def *db-types* {
     :bdb BDB,
     :fdb FDB,
     :hdb HDB
 })
 
+(defn serialize [thing]
+  (binding [*print-dup* true]
+    (pr-str thing)))
+
+(defn unserialize [string]
+  (with-in-str string (read)))
+
+(defn curent-seconds []
+  (/ System/currentTimeMills 1000))
+
 (defmacro getStatic [c f] 
     `(.get (.getField ~c (name '~f)) ~c))
 
-(defn get [key] (.get *db* key))
+(defn get [key] 
+  (if (and (contains? @*cache* key) 
+           (> (current-seconds) (+ (nth (get @*cache* key) 1) *cache-timeout*)))
+    (nth (get @*cache* key) 1)
+    (let [res (unserialize (.get *db* key))]
+      (dosync (ref-set *cache* (assoc @*cache* key [res (current-seconds)])))
+      res)))
 
-(defn put [key value] (.put *db* key value))
+(defn put [key value] (do
+                        (dosync
+                          (ref-set *cache* (assoc @*cache* key [value (current-seconds)])))
+                        (.put *db* key (serialize value))))
 
 (defmacro use [filename type & body]
     (let [klass (type *db-types*)]
